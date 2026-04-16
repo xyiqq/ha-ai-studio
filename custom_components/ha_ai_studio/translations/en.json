@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA AI Studio",
+        "description": "Add HA AI Studio to Home Assistant. This creates a dedicated AI diagnostics workspace focused on Home Assistant configuration, logs, and troubleshooting."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Already configured. Only a single configuration is allowed."
+    }
+  }
+}

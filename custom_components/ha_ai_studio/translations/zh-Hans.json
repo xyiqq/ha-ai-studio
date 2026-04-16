@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA AI Studio",
+        "description": "将 HA AI Studio 添加到 Home Assistant。它会创建一个独立的 AI 诊断工作台，专注于 Home Assistant 配置、日志和故障排查。"
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "已配置。仅允许单个配置实例。"
+    }
+  }
+}

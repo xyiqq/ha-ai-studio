@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>HA AI Studio</title>
+  <link rel="stylesheet" href="/local/ha_ai_studio/styles/app.css">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <div class="brand-mark">HA</div>
+        <div>
+          <div class="brand-title">HA AI Studio</div>
+          <div class="brand-subtitle">配置诊断与排障 Copilot</div>
+        </div>
+      </div>
+
+      <div class="topbar-meta">
+        <div id="connection-pill" class="status-pill">准备中</div>
+        <button id="btn-refresh-diagnostics" class="ghost-btn">刷新诊断</button>
+        <button id="btn-open-settings" class="primary-btn subtle">AI 设置</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside id="sessions-pane" class="pane pane-sessions">
+        <div class="pane-header">
+          <div>
+            <div class="pane-eyebrow">Threads</div>
+            <h2>会话</h2>
+          </div>
+          <button id="btn-new-chat" class="primary-btn compact">New Chat</button>
+        </div>
+
+        <div id="sessions-list" class="sessions-list"></div>
+      </aside>
+
+      <section class="pane pane-chat">
+        <div class="chat-header">
+          <div>
+            <div class="pane-eyebrow">Workspace</div>
+            <h1 id="chat-title">HA AI Studio</h1>
+          </div>
+          <div class="chat-header-actions">
+            <button id="btn-toggle-sessions" class="ghost-btn mobile-only">会话</button>
+            <button id="btn-toggle-diagnostics" class="ghost-btn mobile-only">诊断</button>
+          </div>
+        </div>
+
+        <div id="empty-state" class="empty-state">
+          <div class="empty-badge">Home Assistant Configuration & Diagnostics Copilot</div>
+          <h3>从一个真实的 HA 问题开始</h3>
+          <p>我会优先分析配置、检查结果、最近日志与运行态上下文，并给出证据和修复草稿。</p>
+          <div id="suggested-prompts" class="suggested-prompts"></div>
+        </div>
+
+        <div id="chat-messages" class="chat-messages hidden"></div>
+
+        <div class="composer">
+          <textarea id="chat-input" placeholder="例如：分析我最近的 Home Assistant 错误，告诉我最可能的原因和修复草稿" rows="1"></textarea>
+          <div class="composer-actions">
+            <div class="composer-hint">Enter 发送，Shift + Enter 换行</div>
+            <button id="btn-send" class="primary-btn">发送</button>
+          </div>
+        </div>
+      </section>
+
+      <aside id="diagnostics-pane" class="pane pane-diagnostics">
+        <div class="pane-header">
+          <div>
+            <div class="pane-eyebrow">Diagnostics</div>
+            <h2>诊断侧栏</h2>
+          </div>
+        </div>
+        <div id="diagnostics-content" class="diagnostics-content"></div>
+      </aside>
+    </main>
+  </div>
+
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal-card settings-card">
+      <div class="modal-header">
+        <div>
+          <div class="pane-eyebrow">AI Settings</div>
+          <h3>模型与连接</h3>
+        </div>
+        <button class="icon-btn" data-close-modal="settings-modal">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <label class="field">
+            <span>AI 模式</span>
+            <select id="settings-ai-type">
+              <option value="cloud">Cloud / 中转站</option>
+              <option value="local-ai">Local / 自托管</option>
+            </select>
+          </label>
+
+          <div id="cloud-settings" class="settings-section">
+            <label class="field">
+              <span>Provider</span>
+              <select id="settings-cloud-provider">
+                <option value="openai">OpenAI / Compatible Endpoint</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Base URL</span>
+              <input id="settings-openai-base-url" type="text" placeholder="留空使用 https://api.openai.com/v1">
+            </label>
+            <label class="field">
+              <span>API Key</span>
+              <input id="settings-openai-api-key" type="password" placeholder="sk-...">
+            </label>
+            <div class="model-picker">
+              <label class="field">
+                <span>已发现模型</span>
+                <select id="settings-openai-model-select">
+                  <option value="">手动输入模型名</option>
+                </select>
+              </label>
+              <button id="btn-fetch-openai-models" class="ghost-btn">获取模型</button>
+            </div>
+            <label class="field">
+              <span>模型名称</span>
+              <input id="settings-ai-model" type="text" placeholder="例如 gpt-4.1 / deepseek-chat">
+            </label>
+          </div>
+
+          <div id="local-settings" class="settings-section hidden">
+            <label class="field">
+              <span>本地 Provider</span>
+              <select id="settings-local-provider">
+                <option value="ollama">Ollama</option>
+                <option value="lm-studio">LM Studio</option>
+                <option value="custom">Custom Endpoint</option>
+              </select>
+            </label>
+
+            <label id="field-ollama-url" class="field">
+              <span>Ollama URL</span>
+              <input id="settings-ollama-url" type="text" placeholder="http://localhost:11434">
+            </label>
+
+            <label id="field-lmstudio-url" class="field hidden">
+              <span>LM Studio URL</span>
+              <input id="settings-lmstudio-url" type="text" placeholder="http://localhost:1234">
+            </label>
+
+            <label id="field-custom-url" class="field hidden">
+              <span>Custom Endpoint URL</span>
+              <input id="settings-custom-url" type="text" placeholder="http://localhost:8000/v1">
+            </label>
+
+            <label id="field-custom-key" class="field hidden">
+              <span>Custom Endpoint API Key</span>
+              <input id="settings-custom-api-key" type="password" placeholder="可选">
+            </label>
+
+            <div class="model-picker">
+              <label class="field">
+                <span>已发现模型</span>
+                <select id="settings-local-model-select">
+                  <option value="">手动输入模型名</option>
+                </select>
+              </label>
+              <button id="btn-fetch-local-models" class="ghost-btn">获取模型</button>
+            </div>
+
+            <label class="field">
+              <span>模型名称</span>
+              <input id="settings-local-model" type="text" placeholder="例如 qwen2.5-coder:7b">
+            </label>
+          </div>
+
+          <label class="field">
+            <span>界面语言</span>
+            <select id="settings-ui-language">
+              <option value="auto">自动 / 中文优先</option>
+              <option value="zh-Hans">简体中文</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="ghost-btn" data-close-modal="settings-modal">取消</button>
+        <button id="btn-save-settings" class="primary-btn">保存设置</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="prompt-modal" class="modal-overlay hidden">
+    <div class="modal-card prompt-card">
+      <div class="modal-header">
+        <h3 id="prompt-modal-title">输入内容</h3>
+        <button class="icon-btn" data-close-modal="prompt-modal">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="field">
+          <span id="prompt-modal-label">标题</span>
+          <input id="prompt-modal-input" type="text" placeholder="">
+        </label>
+      </div>
+      <div class="modal-footer">
+        <button class="ghost-btn" data-close-modal="prompt-modal">取消</button>
+        <button id="btn-confirm-prompt" class="primary-btn">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/local/ha_ai_studio/modules/app.js"></script>
+</body>
+</html>
