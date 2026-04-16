@@ -151,6 +151,8 @@ class DiagnosticsCollector:
                         "exists": True,
                         "size": len(content.encode("utf-8")),
                         "excerpt": clip_text(content, 5000),
+                        "editable_content": clip_text(content, 12000),
+                        "line_count": content.count("\n") + 1,
                         "summary": summarize_text(content, 160),
                     }
                 )

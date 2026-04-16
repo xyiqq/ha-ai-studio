@@ -14,9 +14,12 @@
         <div class="brand-mark">
           <img src="/local/ha_ai_studio/icon.svg" alt="HA AI Studio icon">
         </div>
-        <div>
+        <div class="brand-copy">
           <div class="brand-title">HA AI Studio</div>
-          <div class="brand-subtitle">配置诊断与排障 Copilot</div>
+          <div class="brand-meta-line">
+            <div class="brand-subtitle">配置诊断与排障 Copilot</div>
+            <div id="app-version" class="brand-version">v{{VERSION}}</div>
+          </div>
         </div>
       </div>
 
@@ -47,6 +50,7 @@
             <h1 id="chat-title">HA AI Studio</h1>
           </div>
           <div class="chat-header-actions">
+            <button id="btn-toggle-edit-confirm" class="ghost-btn toggle-pane-btn" title="控制此对话的修改确认策略">修改需确认</button>
             <button id="btn-collapse-sessions" class="ghost-btn toggle-pane-btn" title="隐藏会话历史">隐藏会话</button>
             <button id="btn-collapse-diagnostics" class="ghost-btn toggle-pane-btn" title="隐藏诊断侧栏">隐藏诊断</button>
             <button id="btn-toggle-sessions" class="ghost-btn mobile-only">会话</button>
@@ -69,6 +73,7 @@
             <div class="composer-hint">Enter 发送，Shift + Enter 换行</div>
             <button id="btn-send" class="primary-btn">发送</button>
           </div>
+          <div id="composer-status" class="composer-status hidden" aria-live="polite"></div>
         </div>
       </section>
 
@@ -211,6 +216,29 @@
       <div class="modal-footer">
         <button class="ghost-btn" data-close-modal="prompt-modal">取消</button>
         <button id="btn-confirm-prompt" class="primary-btn">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="confirm-modal" class="modal-overlay hidden">
+    <div class="modal-card prompt-card confirm-card">
+      <div class="modal-header">
+        <div>
+          <div class="pane-eyebrow">Confirm Edit</div>
+          <h3 id="confirm-modal-title">确认修改</h3>
+        </div>
+        <button class="icon-btn" data-close-modal="confirm-modal">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="confirm-modal-summary" class="confirm-summary"></div>
+        <label class="confirm-checkbox">
+          <input id="confirm-modal-skip" type="checkbox">
+          <span>此对话后续修改无需二次确认</span>
+        </label>
+      </div>
+      <div class="modal-footer">
+        <button class="ghost-btn" data-close-modal="confirm-modal">取消</button>
+        <button id="btn-confirm-edit" class="primary-btn">确认</button>
       </div>
     </div>
   </div>

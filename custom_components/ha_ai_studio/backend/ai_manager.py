@@ -248,8 +248,12 @@ class HAStudioAIManager:
             '  "answer": "Markdown answer with sections Diagnosis, Why, Evidence, Repair Draft, How to Verify",\n'
             '  "citations": [{"type": "config_file|config_check|log|entity|service|device|area|template", "title": "", "path": "", "line": 0, "snippet": ""}],\n'
             '  "repair_draft": "Markdown snippet with code fences when applicable",\n'
-            '  "suggested_checks": ["short next step", "short next step"]\n'
+            '  "suggested_checks": ["short next step", "short next step"],\n'
+            '  "proposed_edits": [{"path": "relative/path.yaml", "reason": "why this file needs to change", "content": "full replacement file content"}]\n'
             "}\n"
+            "Only include proposed_edits when you are confident about a concrete file change. "
+            "Use config-relative paths only. Limit edits to YAML, Jinja, and plain text configuration files. "
+            "Each proposed edit must contain the full replacement content for the file.\n"
         )
 
     def _build_diagnostics_context(self, snapshot: dict[str, Any]) -> str:
@@ -259,6 +263,7 @@ class HAStudioAIManager:
                 "path": item.get("path"),
                 "summary": item.get("summary"),
                 "excerpt": clip_text(item.get("excerpt"), 1600),
+                "editable_content": clip_text(item.get("editable_content"), 6000),
             }
             for item in (snapshot.get("config_files") or [])[:4]
         ]
@@ -526,11 +531,19 @@ class HAStudioAIManager:
                 for item in parsed.get("suggested_checks") or []
                 if str(item).strip()
             ]
+            proposed_edits = []
+            for item in parsed.get("proposed_edits") or []:
+                if not isinstance(item, dict):
+                    continue
+                normalized_edit = self._normalize_proposed_edit(item)
+                if normalized_edit:
+                    proposed_edits.append(normalized_edit)
         else:
             answer = raw_text.strip()
             citations = []
             repair_draft = ""
             suggested_checks = []
+            proposed_edits = []
 
         if not citations:
             citations = self._fallback_citations(snapshot)
@@ -544,6 +557,20 @@ class HAStudioAIManager:
             "citations": citations,
             "repair_draft": repair_draft,
             "suggested_checks": suggested_checks,
+            "proposed_edits": proposed_edits,
+        }
+
+    def _normalize_proposed_edit(self, item: dict[str, Any]) -> dict[str, str] | None:
+        """Normalize one model-proposed file edit."""
+        path = str(item.get("path") or "").strip().replace("\\", "/")
+        reason = str(item.get("reason") or "").strip()
+        content = item.get("content")
+        if not path or not reason or not isinstance(content, str):
+            return None
+        return {
+            "path": path,
+            "reason": reason,
+            "content": content,
         }
 
     def _format_answer_from_fields(self, payload: dict[str, Any]) -> str:

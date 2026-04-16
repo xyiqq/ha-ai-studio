@@ -39,6 +39,7 @@ from .const import (
     PANEL_URL_PATH,
     PANEL_VIEW_PATH,
     STATIC_BASE_PATH,
+    VERSION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -100,6 +101,7 @@ def _fallback_panel_html() -> str:
     <main>
       <h1>{FALLBACK_PANEL_TITLE}</h1>
       <p>{FALLBACK_PANEL_SUBTITLE}</p>
+      <p style="margin-top: 12px;">Version: <code>{VERSION}</code></p>
       <p style="margin-top: 12px;">Expected frontend entry: <code>/local/{DOMAIN}/panels/panel.html</code></p>
     </main>
   </body>
@@ -122,6 +124,7 @@ class HAAIStudioPanelView(HomeAssistantView):
         """Serve the built panel or a fallback shell."""
         if self._html_path.exists():
             content = await asyncio.to_thread(self._html_path.read_text, encoding="utf-8")
+            content = content.replace("{{VERSION}}", VERSION)
         else:
             content = _fallback_panel_html()
 

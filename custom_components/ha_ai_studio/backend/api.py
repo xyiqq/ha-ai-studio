@@ -14,7 +14,8 @@ from homeassistant.core import HomeAssistant
 from ..const import API_BASE_PATH, DOMAIN
 from .ai_manager import HAStudioAIManager
 from .diagnostics import DiagnosticsCollector
-from .storage import SessionManager, SettingsManager
+from .editor import SafeConfigEditor
+from .storage import BackupManager, SessionManager, SettingsManager
 from .util import json_message, json_response, summarize_text
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,8 +29,10 @@ class BackendRuntime:
     config_dir: Path
     settings: SettingsManager
     sessions: SessionManager
+    backups: BackupManager
     diagnostics: DiagnosticsCollector
     ai: HAStudioAIManager
+    editor: SafeConfigEditor
 
 
 def create_backend_runtime(hass: HomeAssistant) -> BackendRuntime:
@@ -42,15 +45,19 @@ def create_backend_runtime(hass: HomeAssistant) -> BackendRuntime:
     config_dir = Path(hass.config.config_dir)
     settings_manager = SettingsManager(hass)
     session_manager = SessionManager(hass)
+    backup_manager = BackupManager(hass)
     diagnostics = DiagnosticsCollector(hass, config_dir)
     ai_manager = HAStudioAIManager(hass, settings_manager)
+    editor = SafeConfigEditor(hass, config_dir, backup_manager)
     runtime = BackendRuntime(
         hass=hass,
         config_dir=config_dir,
         settings=settings_manager,
         sessions=session_manager,
+        backups=backup_manager,
         diagnostics=diagnostics,
         ai=ai_manager,
+        editor=editor,
     )
     domain_data["backend_runtime"] = runtime
     return runtime
@@ -127,6 +134,8 @@ class HAAIStudioApiView(HomeAssistantView):
             "chat_get_session": self._handle_chat_get_session_post,
             "chat_delete_session": self._handle_chat_delete_session,
             "chat_send_message": self._handle_chat_send_message,
+            "chat_apply_proposed_edits": self._handle_chat_apply_proposed_edits,
+            "chat_restore_backup": self._handle_chat_restore_backup,
             "chat_refresh_diagnostics": self._handle_chat_refresh_diagnostics,
             "diagnostics_get_snapshot": self._handle_get_snapshot_post,
         }
@@ -162,7 +171,10 @@ class HAAIStudioApiView(HomeAssistantView):
         return json_response({"success": True, "sessions": sessions})
 
     async def _handle_chat_create_session(self, payload: dict[str, Any]) -> web.Response:
-        session = await self.runtime.sessions.async_create_session(payload.get("title"))
+        session = await self.runtime.sessions.async_create_session(
+            payload.get("title"),
+            auto_approve_edits=bool(payload.get("auto_approve_edits", False)),
+        )
         sessions = await self.runtime.sessions.async_list_sessions()
         return json_response({"success": True, "session": session, "sessions": sessions})
 
@@ -176,6 +188,9 @@ class HAAIStudioApiView(HomeAssistantView):
             title=payload.get("title"),
             last_summary=payload.get("last_summary"),
             diagnostics_snapshot_id=payload.get("diagnostics_snapshot_id"),
+            auto_approve_edits=payload.get("auto_approve_edits")
+            if isinstance(payload.get("auto_approve_edits"), bool)
+            else None,
         )
         if not session:
             return json_message("Session not found", status_code=404)
@@ -315,6 +330,7 @@ class HAAIStudioApiView(HomeAssistantView):
             repair_draft=ai_result.get("repair_draft") or "",
             suggested_checks=ai_result.get("suggested_checks") or [],
             diagnostics_snapshot_id=saved_snapshot["id"],
+            proposed_edits=ai_result.get("proposed_edits") or [],
         )
 
         updated_session = await self.runtime.sessions.async_get_session(session_id)
@@ -328,6 +344,95 @@ class HAAIStudioApiView(HomeAssistantView):
             }
         )
 
+    async def _handle_chat_apply_proposed_edits(self, payload: dict[str, Any]) -> web.Response:
+        session_id = str(payload.get("session_id") or "").strip()
+        if not session_id:
+            return json_message("session_id is required", status_code=400)
+
+        session = await self.runtime.sessions.async_get_session(session_id)
+        if not session:
+            return json_message("Session not found", status_code=404)
+
+        confirmed = bool(payload.get("confirmed", False))
+        if not session.get("auto_approve_edits") and not confirmed:
+            return json_message(
+                "Applying edits requires confirmation for this chat session",
+                status_code=409,
+                requires_confirmation=True,
+            )
+
+        message_id = str(payload.get("message_id") or "").strip()
+        proposed_edits = payload.get("proposed_edits") if isinstance(payload.get("proposed_edits"), list) else None
+
+        source_message = None
+        if proposed_edits is None:
+            if not message_id:
+                return json_message("message_id or proposed_edits is required", status_code=400)
+            source_message = await self.runtime.sessions.async_get_message(session_id, message_id)
+            if not source_message:
+                return json_message("Message not found", status_code=404)
+            proposed_edits = source_message.get("proposed_edits") or []
+
+        if not proposed_edits:
+            return json_message("No proposed edits available to apply", status_code=400)
+
+        if not message_id:
+            if not source_message:
+                return json_message("message_id is required when applying ad-hoc proposed edits", status_code=400)
+            message_id = str(source_message.get("id") or "").strip()
+
+        try:
+            applied_edits = await self.runtime.editor.async_apply_edits(
+                session_id=session_id,
+                message_id=message_id,
+                proposed_edits=proposed_edits,
+            )
+        except ValueError as err:
+            return json_message(str(err), status_code=400)
+        updated_message = await self.runtime.sessions.async_store_applied_edits(
+            session_id,
+            message_id,
+            applied_edits,
+        )
+        updated_session = await self.runtime.sessions.async_get_session(session_id)
+        return json_response(
+            {
+                "success": True,
+                "session": updated_session,
+                "message": updated_message,
+                "applied_edits": applied_edits,
+            }
+        )
+
+    async def _handle_chat_restore_backup(self, payload: dict[str, Any]) -> web.Response:
+        backup_id = str(payload.get("backup_id") or "").strip()
+        if not backup_id:
+            return json_message("backup_id is required", status_code=400)
+
+        try:
+            restored = await self.runtime.editor.async_restore_backup(backup_id)
+        except ValueError as err:
+            return json_message(str(err), status_code=404 if "not found" in str(err).lower() else 400)
+        backup = restored["backup"]
+        session_id = str(payload.get("session_id") or backup.get("session_id") or "").strip()
+        message_id = str(payload.get("message_id") or backup.get("message_id") or "").strip()
+
+        updated_message = None
+        updated_session = None
+        if session_id and message_id:
+            updated_message = await self.runtime.sessions.async_mark_backup_restored(session_id, message_id, backup_id)
+            updated_session = await self.runtime.sessions.async_get_session(session_id)
+
+        return json_response(
+            {
+                "success": True,
+                "backup": backup,
+                "restore_result": restored["result"],
+                "message": updated_message,
+                "session": updated_session,
+            }
+        )
+
 
 async def async_register_views(hass: HomeAssistant) -> None:
     """Register all HTTP views for the integration."""
@@ -337,4 +442,3 @@ async def async_register_views(hass: HomeAssistant) -> None:
     runtime = create_backend_runtime(hass)
     hass.http.register_view(HAAIStudioApiView(runtime))
     domain_data["api_view_registered"] = True
-
