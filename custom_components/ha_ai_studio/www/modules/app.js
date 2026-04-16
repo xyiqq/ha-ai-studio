@@ -24,18 +24,25 @@ const SUGGESTED_PROMPTS = [
   "帮我看模板/Jinja 报错应该怎么改。",
 ];
 
+const UI_PREFS_STORAGE_KEY = "ha_ai_studio_ui_prefs";
+
 const state = {
   settings: { ...DEFAULT_SETTINGS },
   sessions: [],
   activeSessionId: null,
   activeSession: null,
   activeSnapshot: null,
+  pendingMessages: [],
   sending: false,
   modelOptions: {
     cloud: [],
     local: [],
   },
   promptResolver: null,
+  ui: {
+    sessionsCollapsed: false,
+    diagnosticsCollapsed: false,
+  },
 };
 
 const els = {};
@@ -89,6 +96,8 @@ function cacheDom() {
     fieldLmStudioUrl: $("field-lmstudio-url"),
     fieldCustomUrl: $("field-custom-url"),
     fieldCustomKey: $("field-custom-key"),
+    collapseSessionsButton: $("btn-collapse-sessions"),
+    collapseDiagnosticsButton: $("btn-collapse-diagnostics"),
     toggleSessionsButton: $("btn-toggle-sessions"),
     toggleDiagnosticsButton: $("btn-toggle-diagnostics"),
   });
@@ -157,6 +166,41 @@ function autoResizeComposer() {
   if (!input) return;
   input.style.height = "auto";
   input.style.height = `${Math.min(input.scrollHeight, 220)}px`;
+}
+
+function loadUiPrefs() {
+  try {
+    const raw = window.localStorage.getItem(UI_PREFS_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    state.ui.sessionsCollapsed = !!parsed.sessionsCollapsed;
+    state.ui.diagnosticsCollapsed = !!parsed.diagnosticsCollapsed;
+  } catch (error) {
+    console.warn("Failed to load UI preferences", error);
+  }
+}
+
+function saveUiPrefs() {
+  try {
+    window.localStorage.setItem(UI_PREFS_STORAGE_KEY, JSON.stringify(state.ui));
+  } catch (error) {
+    console.warn("Failed to save UI preferences", error);
+  }
+}
+
+function applyPaneVisibilityState() {
+  const appShell = $("app");
+  if (!appShell) return;
+  appShell.classList.toggle("sessions-collapsed", state.ui.sessionsCollapsed);
+  appShell.classList.toggle("diagnostics-collapsed", state.ui.diagnosticsCollapsed);
+  if (els.collapseSessionsButton) {
+    els.collapseSessionsButton.textContent = state.ui.sessionsCollapsed ? "显示会话" : "隐藏会话";
+    els.collapseSessionsButton.title = state.ui.sessionsCollapsed ? "显示 AI 会话历史" : "隐藏 AI 会话历史";
+  }
+  if (els.collapseDiagnosticsButton) {
+    els.collapseDiagnosticsButton.textContent = state.ui.diagnosticsCollapsed ? "显示诊断" : "隐藏诊断";
+    els.collapseDiagnosticsButton.title = state.ui.diagnosticsCollapsed ? "显示诊断侧栏" : "隐藏诊断侧栏";
+  }
 }
 
 function collectSettingsFromForm() {
@@ -391,6 +435,9 @@ function renderRichText(text) {
 
 function renderMessage(message) {
   const roleLabel = message.role === "user" ? "You" : "HA Copilot";
+  const timestampLabel = message.pending
+    ? (message.role === "user" ? "发送中..." : "分析中...")
+    : formatDateTime(message.created_at);
   const extraSections = [];
 
   if (message.citations?.length) {
@@ -435,7 +482,7 @@ function renderMessage(message) {
       <div class="message-card">
         <div class="message-meta">
           <span>${roleLabel}</span>
-          <span>${escapeHtml(formatDateTime(message.created_at))}</span>
+          <span>${escapeHtml(timestampLabel)}</span>
         </div>
         <div class="message-body">${renderRichText(message.content)}</div>
       </div>
@@ -447,25 +494,16 @@ function renderMessage(message) {
 function renderActiveSession() {
   const session = state.activeSession;
   els.chatTitle.textContent = session?.title || "HA AI Studio";
+  const renderedMessages = [...(session?.messages || []), ...state.pendingMessages];
 
-  if (!session || !session.messages?.length) {
+  if (!session || !renderedMessages.length) {
     els.emptyState.classList.remove("hidden");
     els.chatMessages.classList.add("hidden");
     els.chatMessages.innerHTML = "";
   } else {
     els.emptyState.classList.add("hidden");
     els.chatMessages.classList.remove("hidden");
-    els.chatMessages.innerHTML = session.messages.map(renderMessage).join("");
-    if (state.sending) {
-      els.chatMessages.insertAdjacentHTML("beforeend", `
-        <article class="message assistant">
-          <div class="message-card">
-            <div class="message-meta"><span>HA Copilot</span><span>生成中</span></div>
-            <div class="message-body"><p>正在结合配置、检查结果和最近日志进行分析...</p></div>
-          </div>
-        </article>
-      `);
-    }
+    els.chatMessages.innerHTML = renderedMessages.map(renderMessage).join("");
     els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
   }
 }
@@ -628,26 +666,54 @@ async function sendMessage(explicitMessage = "") {
   }
 
   state.sending = true;
+  state.pendingMessages = [
+    {
+      id: `pending-user-${Date.now()}`,
+      role: "user",
+      content: message,
+      created_at: new Date().toISOString(),
+      pending: true,
+      citations: [],
+      repair_draft: "",
+      suggested_checks: [],
+    },
+    {
+      id: `pending-assistant-${Date.now() + 1}`,
+      role: "assistant",
+      content: "正在结合配置、检查结果和最近日志进行分析...",
+      created_at: new Date().toISOString(),
+      pending: true,
+      citations: [],
+      repair_draft: "",
+      suggested_checks: [],
+    },
+  ];
+  els.chatInput.value = "";
+  autoResizeComposer();
   renderActiveSession();
   els.sendButton.disabled = true;
+  els.sendButton.textContent = "分析中...";
 
   try {
     const result = await apiPost("chat_send_message", {
       session_id: state.activeSessionId,
       message,
     });
+    state.pendingMessages = [];
     state.activeSession = result.session;
     state.activeSnapshot = result.diagnostics_snapshot || null;
     await loadSessions();
     renderActiveSession();
     renderDiagnostics();
-    els.chatInput.value = "";
-    autoResizeComposer();
   } catch (error) {
+    state.pendingMessages = [];
+    els.chatInput.value = message;
+    autoResizeComposer();
     showToast(error.message || "发送失败", "error");
   } finally {
     state.sending = false;
     els.sendButton.disabled = false;
+    els.sendButton.textContent = "发送";
     renderActiveSession();
   }
 }
@@ -749,6 +815,20 @@ function bindEvents() {
   els.fetchOpenaiModels.addEventListener("click", () => fetchModels("cloud"));
   els.fetchLocalModels.addEventListener("click", () => fetchModels("local"));
   els.saveSettingsButton.addEventListener("click", saveSettings);
+  if (els.collapseSessionsButton) {
+    els.collapseSessionsButton.addEventListener("click", () => {
+      state.ui.sessionsCollapsed = !state.ui.sessionsCollapsed;
+      applyPaneVisibilityState();
+      saveUiPrefs();
+    });
+  }
+  if (els.collapseDiagnosticsButton) {
+    els.collapseDiagnosticsButton.addEventListener("click", () => {
+      state.ui.diagnosticsCollapsed = !state.ui.diagnosticsCollapsed;
+      applyPaneVisibilityState();
+      saveUiPrefs();
+    });
+  }
 
   document.querySelectorAll("[data-close-modal]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -781,6 +861,8 @@ function bindEvents() {
 
 async function init() {
   cacheDom();
+  loadUiPrefs();
+  applyPaneVisibilityState();
   bindEvents();
   renderSuggestedPrompts();
   autoResizeComposer();
