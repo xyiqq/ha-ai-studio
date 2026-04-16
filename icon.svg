@@ -1,39 +1,41 @@
 <svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect width="512" height="512" rx="128" fill="url(#bg)"/>
-  <circle cx="151" cy="118" r="54" fill="#4AD7B5" fill-opacity="0.14"/>
-  <circle cx="404" cy="392" r="74" fill="#5AA9FF" fill-opacity="0.12"/>
-  <path d="M256 100C268.15 100 278 109.85 278 122V142H338C377.765 142 410 174.235 410 214V318C410 357.765 377.765 390 338 390H174C134.235 390 102 357.765 102 318V214C102 174.235 134.235 142 174 142H234V122C234 109.85 243.85 100 256 100Z" fill="url(#shell)"/>
-  <path d="M174 160H338C367.823 160 392 184.177 392 214V318C392 347.823 367.823 372 338 372H174C144.177 372 120 347.823 120 318V214C120 184.177 144.177 160 174 160Z" stroke="rgba(255,255,255,0.18)" stroke-width="4"/>
-  <rect x="150" y="190" width="212" height="108" rx="34" fill="#0E1730"/>
-  <circle cx="210" cy="244" r="28" fill="url(#eyeGlow)"/>
-  <circle cx="302" cy="244" r="28" fill="url(#eyeGlow)"/>
-  <circle cx="210" cy="244" r="13" fill="#E8FFF8"/>
-  <circle cx="302" cy="244" r="13" fill="#E8FFF8"/>
-  <path d="M204 322C216.609 337.294 234.972 346 256 346C277.028 346 295.391 337.294 308 322" stroke="#6BE0C2" stroke-width="16" stroke-linecap="round"/>
-  <rect x="74" y="222" width="34" height="88" rx="17" fill="url(#limb)"/>
-  <rect x="404" y="222" width="34" height="88" rx="17" fill="url(#limb)"/>
-  <rect x="176" y="382" width="40" height="72" rx="20" fill="url(#limb)"/>
-  <rect x="296" y="382" width="40" height="72" rx="20" fill="url(#limb)"/>
-  <circle cx="256" cy="122" r="18" fill="#8BEAD1"/>
-  <path d="M256 62V96" stroke="#8BEAD1" stroke-width="14" stroke-linecap="round"/>
+  <rect width="512" height="512" rx="132" fill="url(#bg)"/>
+  <rect x="96" y="118" width="320" height="276" rx="92" fill="url(#shell)"/>
+  <rect x="122" y="146" width="268" height="220" rx="72" fill="url(#face)"/>
+  <rect x="152" y="222" width="80" height="80" rx="40" fill="url(#eye)"/>
+  <rect x="280" y="222" width="80" height="80" rx="40" fill="url(#eye)"/>
+  <circle cx="192" cy="250" r="18" fill="#F4FEFF"/>
+  <circle cx="320" cy="250" r="18" fill="#F4FEFF"/>
+  <path d="M186 327C203.46 346.42 227.78 358 256 358C284.22 358 308.54 346.42 326 327" stroke="#8CF3E0" stroke-width="16" stroke-linecap="round"/>
+  <rect x="232" y="78" width="48" height="58" rx="24" fill="#8AEED9"/>
+  <circle cx="256" cy="66" r="26" fill="#57D7C5"/>
+  <rect x="66" y="212" width="42" height="118" rx="21" fill="url(#limb)"/>
+  <rect x="404" y="212" width="42" height="118" rx="21" fill="url(#limb)"/>
+  <rect x="174" y="386" width="46" height="80" rx="23" fill="url(#limb)"/>
+  <rect x="292" y="386" width="46" height="80" rx="23" fill="url(#limb)"/>
+  <path d="M104 162C128 130 168 112 212 112H300C344 112 384 130 408 162" stroke="rgba(255,255,255,0.18)" stroke-width="8" stroke-linecap="round"/>
   <defs>
-    <linearGradient id="bg" x1="64" y1="40" x2="440" y2="472" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#0F172A"/>
-      <stop offset="0.5" stop-color="#0C1324"/>
-      <stop offset="1" stop-color="#12203A"/>
+    <linearGradient id="bg" x1="72" y1="52" x2="444" y2="468" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0E1B32"/>
+      <stop offset="0.48" stop-color="#13294A"/>
+      <stop offset="1" stop-color="#183760"/>
     </linearGradient>
-    <linearGradient id="shell" x1="134" y1="118" x2="396" y2="414" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#1E3258"/>
-      <stop offset="0.52" stop-color="#16233F"/>
-      <stop offset="1" stop-color="#0F1A31"/>
+    <linearGradient id="shell" x1="120" y1="132" x2="388" y2="410" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#57D7C5"/>
+      <stop offset="0.4" stop-color="#33B9CC"/>
+      <stop offset="1" stop-color="#4D8FFF"/>
     </linearGradient>
-    <linearGradient id="limb" x1="91" y1="208" x2="323" y2="446" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#27406F"/>
-      <stop offset="1" stop-color="#132342"/>
+    <linearGradient id="face" x1="148" y1="164" x2="364" y2="348" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#112341"/>
+      <stop offset="1" stop-color="#0B1830"/>
     </linearGradient>
-    <radialGradient id="eyeGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(210 244) rotate(90) scale(28)">
-      <stop stop-color="#8CF5DC"/>
-      <stop offset="1" stop-color="#38B89C"/>
-    </radialGradient>
+    <linearGradient id="eye" x1="168" y1="228" x2="344" y2="304" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7CF3E4"/>
+      <stop offset="1" stop-color="#6CB4FF"/>
+    </linearGradient>
+    <linearGradient id="limb" x1="86" y1="198" x2="340" y2="456" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#44C9C9"/>
+      <stop offset="1" stop-color="#4185E8"/>
+    </linearGradient>
   </defs>
 </svg>
