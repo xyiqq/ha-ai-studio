@@ -66,3 +66,12 @@ export async function apiPost(action, payload = {}) {
     body: JSON.stringify({ action, ...payload }),
   });
 }
+
+export async function apiPostWithOptions(action, payload = {}, options = {}) {
+  return fetchWithAuth(API_BASE, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    body: JSON.stringify({ action, ...payload }),
+    signal: options.signal,
+  });
+}

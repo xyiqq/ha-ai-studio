@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from "./api.js";
+import { apiGet, apiPost, apiPostWithOptions } from "./api.js";
 
 const DEFAULT_SETTINGS = {
   aiType: "cloud",
@@ -34,6 +34,8 @@ const state = {
   activeSnapshot: null,
   pendingMessages: [],
   sending: false,
+  currentRunId: null,
+  currentAbortController: null,
   modelOptions: {
     cloud: [],
     local: [],
@@ -217,8 +219,8 @@ function setComposerStatus(message = "", tone = "neutral") {
 }
 
 function isDirectApplyEnabled(sessionId = state.activeSessionId) {
-  if (!sessionId) return false;
-  return !!state.ui.skipEditConfirmBySession[sessionId];
+  if (!sessionId || !state.activeSession) return false;
+  return !!state.activeSession.auto_approve_edits;
 }
 
 function updateEditConfirmControl() {
@@ -812,9 +814,6 @@ async function saveSettings() {
 
 async function setDirectApplyEnabled(enabled) {
   if (!state.activeSessionId) return;
-  if (enabled) state.ui.skipEditConfirmBySession[state.activeSessionId] = true;
-  else delete state.ui.skipEditConfirmBySession[state.activeSessionId];
-  saveUiPrefs();
   try {
     const result = await apiPost("chat_update_session", {
       session_id: state.activeSessionId,
@@ -1304,11 +1303,13 @@ function beginOptimisticSend(message) {
   ];
   renderActiveSession();
   setComposerStatus("已发送，正在分析配置、日志和运行态上下文...", "busy");
-  els.sendButton.disabled = true;
-  els.sendButton.textContent = "分析中...";
+  els.sendButton.disabled = false;
+  els.sendButton.textContent = "暂停";
 }
 
 function clearSendState() {
+  state.currentRunId = null;
+  state.currentAbortController = null;
   state.pendingMessages = [];
   state.sending = false;
   els.sendButton.disabled = false;
@@ -1317,9 +1318,52 @@ function clearSendState() {
   renderActiveSession();
 }
 
+function cancelCurrentRun() {
+  if (!state.sending) return;
+
+  if (state.currentAbortController) {
+    state.currentAbortController.abort();
+  }
+  if (state.currentRunId) {
+    apiPost("chat_cancel_run", { run_id: state.currentRunId }).catch(() => {});
+  }
+
+  const pendingUser = state.pendingMessages.find((item) => item.role === "user");
+  if (pendingUser) {
+    state.activeSession = state.activeSession || {
+      id: state.activeSessionId || "__local__",
+      title: summarizeTitle(pendingUser.content),
+      messages: [],
+    };
+    state.activeSession.messages = [
+      ...(state.activeSession.messages || []),
+      { ...pendingUser, pending: false },
+      {
+        id: `stopped-${Date.now()}`,
+        role: "assistant",
+        content: "当前分析已停止。你可以继续补充问题，或者重新发送。",
+        created_at: new Date().toISOString(),
+        citations: [],
+        repair_draft: "",
+        suggested_checks: [],
+        proposed_edits: [],
+        applied_edits: [],
+      },
+    ];
+  }
+
+  clearSendState();
+  setComposerStatus("已停止当前分析。", "neutral");
+  showToast("已停止当前分析", "success");
+}
+
 async function sendMessage(explicitMessage = "") {
+  if (state.sending) {
+    cancelCurrentRun();
+    return;
+  }
   const message = (explicitMessage || els.chatInput.value || "").trim();
-  if (!message || state.sending) return;
+  if (!message) return;
   if (!isAiConfigured()) {
     showToast("请先在 AI 设置里配置模型连接。", "error");
     openModal(els.settingsModal);
@@ -1327,6 +1371,8 @@ async function sendMessage(explicitMessage = "") {
   }
 
   state.sending = true;
+  state.currentRunId = `run_${Date.now()}`;
+  state.currentAbortController = new AbortController();
   beginOptimisticSend(message);
   els.chatInput.value = "";
   autoResizeComposer();
@@ -1339,16 +1385,26 @@ async function sendMessage(explicitMessage = "") {
       throw new Error("无法创建或选中会话");
     }
 
-    const result = await apiPost("chat_send_message", {
-      session_id: state.activeSessionId,
-      message,
-    });
-    state.activeSession = result.session;
-    state.activeSnapshot = result.diagnostics_snapshot || null;
-    await loadSessions();
-    renderActiveSession();
-    renderDiagnostics();
+    const result = await apiPostWithOptions(
+      "chat_send_message",
+      {
+        session_id: state.activeSessionId,
+        message,
+        run_id: state.currentRunId,
+      },
+      { signal: state.currentAbortController.signal },
+    );
+    if (!result.cancelled) {
+      state.activeSession = result.session;
+      state.activeSnapshot = result.diagnostics_snapshot || null;
+      await loadSessions();
+      renderActiveSession();
+      renderDiagnostics();
+    }
   } catch (error) {
+    if (error.name === "AbortError") {
+      return;
+    }
     els.chatInput.value = message;
     autoResizeComposer();
     if (state.activeSession?.id === "__pending__") {
@@ -1356,7 +1412,9 @@ async function sendMessage(explicitMessage = "") {
     }
     showToast(error.message || "发送失败", "error");
   } finally {
-    clearSendState();
+    if (state.sending) {
+      clearSendState();
+    }
   }
 }
 
@@ -1427,7 +1485,7 @@ async function handleProposedEdit(action, eventTarget) {
       return;
     }
     if (confirmation.skipFuture) {
-      setDirectApplyEnabled(true);
+      await setDirectApplyEnabled(true);
     }
   }
 

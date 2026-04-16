@@ -29,6 +29,29 @@ CONFIG_FILENAMES = (
     "templates.yaml",
 )
 
+DISCOVERY_SUFFIXES = {
+    ".yaml",
+    ".yml",
+    ".jinja",
+    ".jinja2",
+    ".j2",
+    ".json",
+    ".toml",
+    ".conf",
+    ".cfg",
+    ".ini",
+    ".txt",
+    ".md",
+    ".py",
+    ".js",
+    ".css",
+    ".html",
+    ".xml",
+    ".service",
+    ".env",
+    ".properties",
+}
+
 
 class DiagnosticsCollector:
     """Collect read-only Home Assistant diagnostics context."""
@@ -122,6 +145,11 @@ class DiagnosticsCollector:
             for path in sorted(packages_dir.rglob("*.yaml"))[:20]:
                 add_candidate(path)
 
+        blueprints_dir = self.config_dir / "blueprints"
+        if blueprints_dir.exists():
+            for path in sorted(blueprints_dir.rglob("*.yaml"))[:40]:
+                add_candidate(path)
+
         for hint in file_hints:
             hint_path = self.config_dir / hint
             add_candidate(hint_path)
@@ -135,8 +163,41 @@ class DiagnosticsCollector:
             add_candidate(self.config_dir / "scenes.yaml")
         if "template" in lowered_query or "jinja" in lowered_query:
             add_candidate(self.config_dir / "templates.yaml")
+        if "blueprint" in lowered_query or "蓝图" in lowered_query:
+            if blueprints_dir.exists():
+                for path in sorted(blueprints_dir.rglob("*.yaml"))[:40]:
+                    add_candidate(path)
 
-        return candidates[:12]
+        if lowered_query:
+            for path in self._discover_query_matched_files(lowered_query):
+                add_candidate(path)
+
+        return candidates[:20]
+
+    def _discover_query_matched_files(self, lowered_query: str) -> list[Path]:
+        """Return config files whose names or relative paths match query terms."""
+        tokens = self._query_tokens(lowered_query)
+        if not tokens:
+            return []
+
+        matches: list[Path] = []
+        try:
+            for path in self.config_dir.rglob("*"):
+                safe_path = self._safe_config_path(path)
+                if safe_path is None or not safe_path.is_file():
+                    continue
+                if safe_path.suffix.lower() not in DISCOVERY_SUFFIXES:
+                    continue
+                relative = str(safe_path.relative_to(self.config_dir)).replace("\\", "/").lower()
+                filename = safe_path.name.lower()
+                haystack = f"{relative} {filename}"
+                if any(token in haystack for token in tokens):
+                    matches.append(safe_path)
+                if len(matches) >= 30:
+                    break
+        except Exception as err:
+            _LOGGER.debug("Query matched file discovery failed: %s", err)
+        return matches
 
     def _read_config_files(self, query: str, file_hints: list[str]) -> list[dict[str, Any]]:
         """Read a small excerpt from likely relevant config files."""

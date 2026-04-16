@@ -33,6 +33,7 @@ class BackendRuntime:
     diagnostics: DiagnosticsCollector
     ai: HAStudioAIManager
     editor: SafeConfigEditor
+    cancelled_runs: set[str]
 
 
 def create_backend_runtime(hass: HomeAssistant) -> BackendRuntime:
@@ -58,6 +59,7 @@ def create_backend_runtime(hass: HomeAssistant) -> BackendRuntime:
         diagnostics=diagnostics,
         ai=ai_manager,
         editor=editor,
+        cancelled_runs=set(),
     )
     domain_data["backend_runtime"] = runtime
     return runtime
@@ -134,6 +136,7 @@ class HAAIStudioApiView(HomeAssistantView):
             "chat_get_session": self._handle_chat_get_session_post,
             "chat_delete_session": self._handle_chat_delete_session,
             "chat_send_message": self._handle_chat_send_message,
+            "chat_cancel_run": self._handle_chat_cancel_run,
             "chat_apply_proposed_edits": self._handle_chat_apply_proposed_edits,
             "chat_restore_backup": self._handle_chat_restore_backup,
             "chat_refresh_diagnostics": self._handle_chat_refresh_diagnostics,
@@ -286,6 +289,7 @@ class HAAIStudioApiView(HomeAssistantView):
         file_hints = payload.get("file_hints") if isinstance(payload.get("file_hints"), list) else []
         template = payload.get("template")
         settings_override = payload.get("settings") if isinstance(payload.get("settings"), dict) else payload
+        run_id = str(payload.get("run_id") or "").strip()
 
         snapshot = await self.runtime.diagnostics.collect_snapshot(
             message_text,
@@ -322,6 +326,19 @@ class HAAIStudioApiView(HomeAssistantView):
             content=message_text,
             diagnostics_snapshot_id=saved_snapshot["id"],
         )
+        if run_id and run_id in self.runtime.cancelled_runs:
+            self.runtime.cancelled_runs.discard(run_id)
+            updated_session = await self.runtime.sessions.async_get_session(session_id)
+            return json_response(
+                {
+                    "success": False,
+                    "cancelled": True,
+                    "run_id": run_id,
+                    "session": updated_session,
+                    "user_message": user_message,
+                    "diagnostics_snapshot": saved_snapshot,
+                }
+            )
         assistant_message = await self.runtime.sessions.async_append_message(
             session_id,
             role="assistant",
@@ -341,8 +358,16 @@ class HAAIStudioApiView(HomeAssistantView):
                 "user_message": user_message,
                 "assistant_message": assistant_message,
                 "diagnostics_snapshot": saved_snapshot,
+                "run_id": run_id,
             }
         )
+
+    async def _handle_chat_cancel_run(self, payload: dict[str, Any]) -> web.Response:
+        run_id = str(payload.get("run_id") or "").strip()
+        if not run_id:
+            return json_message("run_id is required", status_code=400)
+        self.runtime.cancelled_runs.add(run_id)
+        return json_response({"success": True, "cancelled": True, "run_id": run_id})
 
     async def _handle_chat_apply_proposed_edits(self, payload: dict[str, Any]) -> web.Response:
         session_id = str(payload.get("session_id") or "").strip()
