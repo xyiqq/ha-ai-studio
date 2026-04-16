@@ -3,7 +3,7 @@ from __future__ import annotations
 
 DOMAIN = "ha_ai_studio"
 NAME = "HA AI Studio"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 PANEL_ICON = "mdi:robot-outline"
 PANEL_COMPONENT = "iframe"
