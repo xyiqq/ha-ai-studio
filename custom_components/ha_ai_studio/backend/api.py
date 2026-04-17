@@ -406,6 +406,7 @@ class HAAIStudioApiView(HomeAssistantView):
                 return json_message("message_id is required when applying ad-hoc proposed edits", status_code=400)
             message_id = str(source_message.get("id") or "").strip()
 
+        baseline_check = await self.runtime.diagnostics.async_run_config_check(force_refresh=True)
         try:
             applied_edits = await self.runtime.editor.async_apply_edits(
                 session_id=session_id,
@@ -414,6 +415,37 @@ class HAAIStudioApiView(HomeAssistantView):
             )
         except ValueError as err:
             return json_message(str(err), status_code=400)
+
+        config_check = await self.runtime.diagnostics.async_run_config_check(force_refresh=True)
+        if self._config_check_regressed(baseline_check, config_check):
+            rollback_results = await self.runtime.editor.async_rollback_applied_edits(applied_edits)
+            post_rollback_check = await self.runtime.diagnostics.async_run_config_check(force_refresh=True)
+            return json_message(
+                self._build_failed_config_apply_message(config_check),
+                status_code=409,
+                rolled_back=True,
+                config_check=config_check,
+                baseline_config_check=baseline_check,
+                rollback_results=rollback_results,
+                post_rollback_config_check=post_rollback_check,
+            )
+
+        try:
+            reload_results = await self.runtime.editor.async_reload_after_edits(applied_edits)
+        except RuntimeError as err:
+            rollback_results = await self.runtime.editor.async_rollback_applied_edits(applied_edits)
+            post_rollback_check = await self.runtime.diagnostics.async_run_config_check(force_refresh=True)
+            return json_message(
+                self._build_failed_reload_message(err),
+                status_code=409,
+                rolled_back=True,
+                reload_failed=True,
+                config_check=config_check,
+                baseline_config_check=baseline_check,
+                rollback_results=rollback_results,
+                post_rollback_config_check=post_rollback_check,
+            )
+
         updated_message = await self.runtime.sessions.async_store_applied_edits(
             session_id,
             message_id,
@@ -426,6 +458,8 @@ class HAAIStudioApiView(HomeAssistantView):
                 "session": updated_session,
                 "message": updated_message,
                 "applied_edits": applied_edits,
+                "config_check": config_check,
+                "reload_results": reload_results,
             }
         )
 
@@ -448,6 +482,20 @@ class HAAIStudioApiView(HomeAssistantView):
             updated_message = await self.runtime.sessions.async_mark_backup_restored(session_id, message_id, backup_id)
             updated_session = await self.runtime.sessions.async_get_session(session_id)
 
+        try:
+            reload_results = await self.runtime.editor.async_reload_paths([str(backup.get("path") or "")])
+        except RuntimeError as err:
+            return json_message(
+                f"备份已恢复到配置文件，但未能立即重载相关自动化。{err}",
+                status_code=409,
+                restored=True,
+                reload_failed=True,
+                backup=backup,
+                restore_result=restored["result"],
+                message=updated_message,
+                session=updated_session,
+            )
+
         return json_response(
             {
                 "success": True,
@@ -455,8 +503,72 @@ class HAAIStudioApiView(HomeAssistantView):
                 "restore_result": restored["result"],
                 "message": updated_message,
                 "session": updated_session,
+                "reload_results": reload_results,
             }
         )
+
+    def _config_error_signatures(self, config_check: dict[str, Any] | None) -> set[tuple[str, int, str]]:
+        """Create stable signatures for structured config-check errors."""
+        signatures: set[tuple[str, int, str]] = set()
+        for item in (config_check or {}).get("errors") or []:
+            if not isinstance(item, dict):
+                continue
+            signatures.add(
+                (
+                    str(item.get("file") or ""),
+                    int(item.get("line") or 0),
+                    str(item.get("message") or ""),
+                )
+            )
+        return signatures
+
+    def _config_check_regressed(
+        self,
+        baseline_check: dict[str, Any],
+        updated_check: dict[str, Any],
+    ) -> bool:
+        """Return true when applied edits introduce new config-check failures."""
+        if updated_check.get("success"):
+            return False
+
+        if baseline_check.get("success"):
+            return True
+
+        baseline_errors = self._config_error_signatures(baseline_check)
+        updated_errors = self._config_error_signatures(updated_check)
+        if updated_errors - baseline_errors:
+            return True
+
+        return False
+
+    def _build_failed_config_apply_message(self, config_check: dict[str, Any]) -> str:
+        """Build a readable message for failed edit application."""
+        errors = config_check.get("errors") or []
+        if errors:
+            first_error = errors[0]
+            location = str(first_error.get("file") or "").strip()
+            line = int(first_error.get("line") or 0)
+            if location and line > 0:
+                location = f"{location}:{line}"
+            detail = str(first_error.get("message") or "").strip()
+            summary = "应用修改后 Home Assistant 配置校验失败，已自动回滚。"
+            if location:
+                return f"{summary} 首个错误位于 {location}。{detail}".strip()
+            if detail:
+                return f"{summary} {detail}".strip()
+
+        output = summarize_text(str(config_check.get("output") or ""), 260)
+        if output:
+            return f"应用修改后 Home Assistant 配置校验失败，已自动回滚。{output}"
+        return "应用修改后 Home Assistant 配置校验失败，已自动回滚。"
+
+    def _build_failed_reload_message(self, err: Exception) -> str:
+        """Build a readable message for failed live reload after edits."""
+        detail = str(err).strip()
+        summary = "修改已写入，但相关自动化未能立即重载，已自动回滚，所以无需重启前也不会留下半生效状态。"
+        if detail:
+            return f"{summary} {detail}".strip()
+        return summary
 
 
 async def async_register_views(hass: HomeAssistant) -> None:

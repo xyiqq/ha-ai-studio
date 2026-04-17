@@ -114,10 +114,10 @@ class DiagnosticsCollector:
         snapshot["summary"] = self._summarize_snapshot(snapshot)
         return snapshot
 
-    async def async_run_config_check(self) -> dict[str, Any]:
+    async def async_run_config_check(self, *, force_refresh: bool = False) -> dict[str, Any]:
         """Run or reuse a cached configuration check."""
         now = time.monotonic()
-        if self._config_check_cache and now - self._config_check_cache[0] < 30:
+        if not force_refresh and self._config_check_cache and now - self._config_check_cache[0] < 30:
             return self._config_check_cache[1]
         result = await self.hass.async_add_executor_job(self._run_config_check)
         self._config_check_cache = (now, result)

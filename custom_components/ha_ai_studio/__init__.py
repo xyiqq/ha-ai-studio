@@ -191,7 +191,11 @@ async def _register_static_path(hass: HomeAssistant) -> None:
 async def _try_register_backend_views(hass: HomeAssistant) -> bool:
     """Register backend-provided views when they become available."""
     try:
-        backend_api = importlib.import_module(f".backend.api", __package__)
+        backend_api = await hass.async_add_executor_job(
+            importlib.import_module,
+            f".backend.api",
+            __package__,
+        )
     except ModuleNotFoundError as err:
         if err.name in {f"{__package__}.backend", f"{__package__}.backend.api"}:
             return False

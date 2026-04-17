@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
+import re
 from typing import Any
 
 import aiohttp
@@ -225,7 +227,7 @@ class HAStudioAIManager:
             ai_model=ai_model,
             messages=messages,
         )
-        normalized = self._normalize_model_reply(raw_text, snapshot)
+        normalized = self._normalize_model_reply(raw_text, snapshot, user_message=user_message)
         normalized["model"] = ai_model or ""
         normalized["provider"] = provider
         return normalized
@@ -241,6 +243,9 @@ class HAStudioAIManager:
             "Home Assistant context.\n"
             "Use the provided diagnostics snapshot as evidence. Do not claim you changed files. Do not suggest destructive "
             "actions without clearly marking them as needing manual confirmation.\n"
+            "When the user explicitly asks to create or update an automation, scene, script, or template, the app can "
+            "apply file edits after confirmation. Do not say that you cannot write files or that the user must copy "
+            "the YAML manually.\n"
             "Prefer concise, technical answers. Reply in "
             f"{preferred_language}.\n"
             "Return JSON only with this shape:\n"
@@ -254,6 +259,7 @@ class HAStudioAIManager:
             "Only include proposed_edits when you are confident about a concrete file change. "
             "Use config-relative paths only. Limit edits to YAML, Jinja, and plain text configuration files. "
             "Each proposed edit must contain the full replacement content for the file.\n"
+            "For explicit creation requests, prefer returning one concrete proposed edit instead of only describing the YAML.\n"
         )
 
     def _build_diagnostics_context(self, snapshot: dict[str, Any]) -> str:
@@ -513,7 +519,13 @@ class HAStudioAIManager:
                     break
         return models, configured_available
 
-    def _normalize_model_reply(self, raw_text: str, snapshot: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_model_reply(
+        self,
+        raw_text: str,
+        snapshot: dict[str, Any],
+        *,
+        user_message: str,
+    ) -> dict[str, Any]:
         """Normalize a model response into the API contract."""
         parsed = parse_json_object(raw_text)
         if isinstance(parsed, dict):
@@ -545,6 +557,14 @@ class HAStudioAIManager:
             suggested_checks = []
             proposed_edits = []
 
+        if not proposed_edits:
+            proposed_edits = self._infer_proposed_edits(
+                user_message=user_message,
+                raw_text=raw_text,
+                answer=answer,
+                repair_draft=repair_draft,
+            )
+
         if not citations:
             citations = self._fallback_citations(snapshot)
         if not suggested_checks:
@@ -560,6 +580,38 @@ class HAStudioAIManager:
             "proposed_edits": proposed_edits,
         }
 
+    def _infer_proposed_edits(
+        self,
+        *,
+        user_message: str,
+        raw_text: str,
+        answer: str,
+        repair_draft: str,
+    ) -> list[dict[str, str]]:
+        """Infer one concrete edit when the model only returned a YAML draft."""
+        if not self._is_explicit_create_request(user_message):
+            return []
+
+        target_path = self._infer_target_yaml_path(user_message, raw_text, answer, repair_draft)
+        if not target_path:
+            return []
+
+        snippet = self._extract_yaml_snippet(repair_draft) or self._extract_yaml_snippet(raw_text) or self._extract_yaml_snippet(answer)
+        if not snippet:
+            return []
+
+        full_content = self._build_inferred_file_content(target_path, snippet)
+        if not full_content:
+            return []
+
+        return [
+            {
+                "path": target_path,
+                "reason": self._build_inferred_edit_reason(target_path, user_message),
+                "content": full_content,
+            }
+        ]
+
     def _normalize_proposed_edit(self, item: dict[str, Any]) -> dict[str, str] | None:
         """Normalize one model-proposed file edit."""
         path = str(item.get("path") or "").strip().replace("\\", "/")
@@ -572,6 +624,86 @@ class HAStudioAIManager:
             "reason": reason,
             "content": content,
         }
+
+    def _is_explicit_create_request(self, user_message: str) -> bool:
+        """Return whether the user is explicitly asking to create something."""
+        lowered = (user_message or "").lower()
+        create_tokens = (
+            "创建",
+            "新建",
+            "新增",
+            "直接创建",
+            "直接加",
+            "帮我创建",
+            "create",
+            "add",
+        )
+        return any(token in lowered for token in create_tokens)
+
+    def _infer_target_yaml_path(
+        self,
+        user_message: str,
+        raw_text: str,
+        answer: str,
+        repair_draft: str,
+    ) -> str | None:
+        """Infer the most likely YAML target file for a creation request."""
+        combined = "\n".join(
+            part for part in [user_message, raw_text, answer, repair_draft] if part
+        ).lower()
+        if "scenes.yaml" in combined or "场景" in combined or " scene" in f" {combined}":
+            return "scenes.yaml"
+        if "automations.yaml" in combined or "自动化" in combined or " automation" in f" {combined}":
+            return "automations.yaml"
+        return None
+
+    def _extract_yaml_snippet(self, text: str) -> str:
+        """Extract the best YAML snippet from markdown fences."""
+        if not text:
+            return ""
+        matches = re.findall(r"```(?:yaml|yml)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+        for candidate in matches:
+            snippet = candidate.strip()
+            if snippet.startswith("- ") or "\n- " in snippet:
+                return snippet
+        for candidate in matches:
+            snippet = candidate.strip()
+            if ":" in snippet:
+                return snippet
+        return ""
+
+    def _build_inferred_file_content(self, target_path: str, snippet: str) -> str:
+        """Build a full replacement file from the current file plus one YAML snippet."""
+        normalized_target = str(target_path or "").strip().replace("\\", "/")
+        normalized_snippet = snippet.strip()
+        if not normalized_target or not normalized_snippet:
+            return ""
+
+        current_content = self._read_config_file_text(normalized_target)
+        if current_content.strip():
+            if not normalized_snippet.startswith("- "):
+                return ""
+            return current_content.rstrip() + "\n" + normalized_snippet + "\n"
+        return normalized_snippet.rstrip() + "\n"
+
+    def _read_config_file_text(self, relative_path: str) -> str:
+        """Read one config-relative file from disk for inferred edits."""
+        path = Path(self.hass.config.path(relative_path))
+        try:
+            return path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return ""
+        except Exception:
+            _LOGGER.debug("Failed to read config file for inferred edit: %s", relative_path, exc_info=True)
+            return ""
+
+    def _build_inferred_edit_reason(self, target_path: str, user_message: str) -> str:
+        """Build a stable reason string for inferred YAML append edits."""
+        if target_path == "scenes.yaml":
+            return f"根据用户的创建请求，把新场景追加到 {target_path}"
+        if target_path == "automations.yaml":
+            return f"根据用户的创建请求，把新自动化追加到 {target_path}"
+        return f"根据用户的创建请求，更新 {target_path}"
 
     def _format_answer_from_fields(self, payload: dict[str, Any]) -> str:
         """Build a markdown answer if the model returned split fields."""

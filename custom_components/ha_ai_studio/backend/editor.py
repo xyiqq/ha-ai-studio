@@ -16,31 +16,24 @@ SAFE_TEXT_SUFFIXES = {
     ".jinja",
     ".jinja2",
     ".j2",
-    ".txt",
     ".conf",
     ".cfg",
     ".ini",
     ".json",
-    ".md",
-    ".csv",
-    ".log",
-    ".template",
-    ".tmpl",
-    ".py",
-    ".js",
-    ".ts",
-    ".css",
-    ".html",
     ".xml",
     ".toml",
     ".env",
-    ".service",
-    ".sh",
-    ".bash",
-    ".zsh",
-    ".sql",
     ".properties",
-    ".rst",
+}
+AUTOMATION_RELOAD_EXACT_PATHS = {
+    "automations.yaml",
+}
+AUTOMATION_RELOAD_PREFIXES = (
+    "automations/",
+    "blueprints/automation/",
+)
+SCENE_RELOAD_EXACT_PATHS = {
+    "scenes.yaml",
 }
 BLOCKED_PATH_PARTS = {
     ".storage",
@@ -49,6 +42,11 @@ BLOCKED_PATH_PARTS = {
     ".github",
     ".venv",
     "deps",
+    "custom_components",
+    "node_modules",
+    "pyscript",
+    "python_scripts",
+    "www",
 }
 
 
@@ -68,37 +66,64 @@ class SafeConfigEditor:
         proposed_edits: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Apply a list of proposed edits after creating per-file backups."""
-        results: list[dict[str, Any]] = []
+        normalized_edits: list[dict[str, str]] = []
+        seen_paths: set[str] = set()
         for edit in proposed_edits:
             normalized = self._normalize_proposed_edit(edit)
-            target_path, relative_path = self._resolve_safe_path(normalized["path"])
-            original_state = await self.hass.async_add_executor_job(self._read_original_state, target_path)
-            backup = await self.backups.async_create_backup(
-                path=relative_path,
-                reason=normalized["reason"],
-                session_id=session_id,
-                message_id=message_id,
-                original_content=original_state["content"],
-                file_existed=original_state["file_existed"],
-            )
-            await self.hass.async_add_executor_job(
-                self._write_text_file,
-                target_path,
-                normalized["content"],
-            )
-            results.append(
-                {
-                    "path": relative_path,
-                    "reason": normalized["reason"],
-                    "backup_id": backup["id"],
-                    "status": "applied",
-                    "can_restore": True,
-                    "restored": False,
-                    "applied_at": utc_now_iso(),
-                    "content_preview": clip_text(normalized["content"], 240),
-                }
-            )
+            dedupe_key = normalized["path"].casefold()
+            if dedupe_key in seen_paths:
+                raise ValueError(f"Duplicate edit target is not allowed: {normalized['path']}")
+            seen_paths.add(dedupe_key)
+            normalized_edits.append(normalized)
+
+        results: list[dict[str, Any]] = []
+        try:
+            for normalized in normalized_edits:
+                target_path, relative_path = self._resolve_safe_path(normalized["path"])
+                original_state = await self.hass.async_add_executor_job(self._read_original_state, target_path)
+                backup = await self.backups.async_create_backup(
+                    path=relative_path,
+                    reason=normalized["reason"],
+                    session_id=session_id,
+                    message_id=message_id,
+                    original_content=original_state["content"],
+                    file_existed=original_state["file_existed"],
+                )
+                await self.hass.async_add_executor_job(
+                    self._write_text_file,
+                    target_path,
+                    normalized["content"],
+                )
+                results.append(
+                    {
+                        "path": relative_path,
+                        "reason": normalized["reason"],
+                        "backup_id": backup["id"],
+                        "status": "applied",
+                        "can_restore": True,
+                        "restored": False,
+                        "applied_at": utc_now_iso(),
+                        "content_preview": clip_text(normalized["content"], 240),
+                    }
+                )
+        except Exception:
+            await self.async_rollback_applied_edits(results)
+            raise
         return results
+
+    async def async_rollback_applied_edits(
+        self,
+        applied_edits: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Restore a batch of applied edits in reverse order."""
+        rollback_results: list[dict[str, Any]] = []
+        for applied_edit in reversed(applied_edits):
+            backup_id = str(applied_edit.get("backup_id") or "").strip()
+            if not backup_id:
+                continue
+            restored = await self.async_restore_backup(backup_id)
+            rollback_results.append(restored["result"])
+        return rollback_results
 
     async def async_restore_backup(self, backup_id: str) -> dict[str, Any]:
         """Restore a backup by id."""
@@ -121,6 +146,59 @@ class SafeConfigEditor:
             },
         }
 
+    async def async_reload_after_edits(self, applied_edits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Reload runtime YAML integrations when edited paths support live reload."""
+        edited_paths = [
+            str(item.get("path") or "").strip()
+            for item in applied_edits
+            if str(item.get("path") or "").strip()
+        ]
+        return await self.async_reload_paths(edited_paths)
+
+    async def async_reload_paths(self, relative_paths: list[str]) -> list[dict[str, Any]]:
+        """Reload runtime YAML integrations for supported edited paths."""
+        normalized_paths = sorted(
+            {
+                str(path or "").strip().replace("\\", "/")
+                for path in relative_paths
+                if str(path or "").strip()
+            }
+        )
+        automation_paths = [path for path in normalized_paths if self._requires_automation_reload(path)]
+        scene_paths = [path for path in normalized_paths if self._requires_scene_reload(path)]
+        reload_results: list[dict[str, Any]] = []
+        if not self.hass.services.has_service("automation", "reload"):
+            if automation_paths:
+                raise RuntimeError("Home Assistant 当前无法调用 automation.reload，所以自动化还不能立即生效。")
+        elif automation_paths:
+            await self.hass.services.async_call("automation", "reload", blocking=True)
+            reload_results.append(
+                {
+                    "domain": "automation",
+                    "service": "reload",
+                    "label": "automations",
+                    "paths": automation_paths,
+                    "reloaded_at": utc_now_iso(),
+                }
+            )
+
+        if not self.hass.services.has_service("scene", "reload"):
+            if scene_paths:
+                raise RuntimeError("Home Assistant 当前无法调用 scene.reload，所以场景还不能立即生效。")
+        elif scene_paths:
+            await self.hass.services.async_call("scene", "reload", blocking=True)
+            reload_results.append(
+                {
+                    "domain": "scene",
+                    "service": "reload",
+                    "label": "scenes",
+                    "paths": scene_paths,
+                    "reloaded_at": utc_now_iso(),
+                }
+            )
+
+        return reload_results
+
     def _normalize_proposed_edit(self, edit: dict[str, Any]) -> dict[str, str]:
         """Validate one proposed edit payload."""
         if not isinstance(edit, dict):
@@ -142,6 +220,22 @@ class SafeConfigEditor:
             "reason": reason,
             "content": content,
         }
+
+    def _requires_automation_reload(self, relative_path: str) -> bool:
+        """Return whether a relative config path needs automation.reload."""
+        normalized = str(relative_path or "").strip().replace("\\", "/").casefold()
+        if not normalized:
+            return False
+        if normalized in AUTOMATION_RELOAD_EXACT_PATHS:
+            return True
+        return any(normalized.startswith(prefix) for prefix in AUTOMATION_RELOAD_PREFIXES)
+
+    def _requires_scene_reload(self, relative_path: str) -> bool:
+        """Return whether a relative config path needs scene.reload."""
+        normalized = str(relative_path or "").strip().replace("\\", "/").casefold()
+        if not normalized:
+            return False
+        return normalized in SCENE_RELOAD_EXACT_PATHS
 
     def _resolve_safe_path(self, raw_path: str) -> tuple[Path, str]:
         """Resolve and validate a safe config-relative path."""

@@ -42,7 +42,10 @@ async function fetchWithAuth(url, options = {}) {
 
   if (!response.ok) {
     const message = json.message || json.error || `HTTP ${response.status}`;
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    error.payload = json;
+    throw error;
   }
 
   return json;
